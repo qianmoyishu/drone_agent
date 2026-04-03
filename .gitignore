@@ -32,3 +32,8 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+agnet浓缩
+agent/
+
+git.txt
