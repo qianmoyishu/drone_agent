@@ -18,3 +18,27 @@ def print_grid(grid):
     """
     for row in grid:
         print(row)
+
+def manhattan_distance(pos1, pos2):
+    """
+    曼哈顿距离
+    """
+    x1, y1 = pos1
+    x2, y2 = pos2
+    return abs(x1 - x2) + abs(y1 - y2)
+
+
+def overlay_grid(grid, replacements):
+    """
+    在不修改原地图的情况下，打印带动态对象的位置
+    replacements: dict {(x, y): char}
+    """
+    temp = [list(row) for row in grid]
+
+    for (x, y), ch in replacements.items():
+        if 0 <= x < len(temp) and 0 <= y < len(temp[0]):
+            temp[x][y] = ch
+
+    for row in temp:
+        print("".join(row))
+        

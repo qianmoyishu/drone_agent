@@ -2,64 +2,60 @@ from collections import deque
 from utils import is_walkable
 
 
-def get_neighbors(grid, pos):
+def bfs(grid, start, goal, blocked_positions=None):
     """
-    返回当前位置上下左右四个可走邻居
+    BFS 最短路径搜索
+    blocked_positions: 额外不可走的位置集合，比如敌人位置
+    返回：
+        路径坐标列表，例如 [(1,1), (1,2), (1,3)]
+        如果不可达，返回 None
     """
-    x, y = pos
-    directions = [
-        (-1, 0),  # 上
-        (1, 0),   # 下
-        (0, -1),  # 左
-        (0, 1),   # 右
-    ]
+    if blocked_positions is None:
+        blocked_positions = set()
+    else:
+        blocked_positions = set(blocked_positions)
 
-    neighbors = []
-    for dx, dy in directions:
-        nx, ny = x + dx, y + dy
-        if is_walkable(grid, nx, ny):
-            neighbors.append((nx, ny))
-    return neighbors
-
-
-def reconstruct_path(came_from, start, goal):
-    """
-    根据 came_from 反推完整路径
-    """
-    path = []
-    current = goal
-
-    while current != start:
-        path.append(current)
-        current = came_from[current]
-
-    path.append(start)
-    path.reverse()
-    return path
-
-
-def bfs(grid, start, goal):
-    """
-    使用 BFS 在网格地图中找从 start 到 goal 的最短路径
-    找到返回路径列表，找不到返回 None
-    """
-    if start is None or goal is None:
+    if start in blocked_positions or goal in blocked_positions:
         return None
 
     queue = deque([start])
     visited = set([start])
-    came_from = {}
+    parent = {}
 
     while queue:
         current = queue.popleft()
 
         if current == goal:
-            return reconstruct_path(came_from, start, goal)
+            path = []
+            while current in parent:
+                path.append(current)
+                current = parent[current]
+            path.append(start)
+            path.reverse()
+            return path
 
-        for neighbor in get_neighbors(grid, current):
-            if neighbor not in visited:
-                visited.add(neighbor)
-                came_from[neighbor] = current
-                queue.append(neighbor)
+        x, y = current
+        neighbors = [
+            (x - 1, y),
+            (x + 1, y),
+            (x, y - 1),
+            (x, y + 1),
+        ]
+
+        for nx, ny in neighbors:
+            nxt = (nx, ny)
+
+            if nxt in visited:
+                continue
+
+            if nxt in blocked_positions:
+                continue
+
+            if not is_walkable(grid, nx, ny):
+                continue
+
+            visited.add(nxt)
+            parent[nxt] = current
+            queue.append(nxt)
 
     return None

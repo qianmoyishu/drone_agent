@@ -1,10 +1,13 @@
-from utils import find_pos, print_grid
 from planner import bfs
 from agent import Agent
 from state_machine import StateMachine
+from utils import find_pos, overlay_grid
 
 
 def move_one_step(agent, path, title):
+    """
+    沿当前规划路径移动一步
+    """
     if path is None:
         print(f"{title}：没有找到路径")
         return False
@@ -13,94 +16,172 @@ def move_one_step(agent, path, title):
         print(f"{title}：已经在目标点，无需移动")
         return True
 
+    # 没电就不允许再移动
+    if agent.energy <= 0:
+        print(f"{title}：电量耗尽，无法继续移动")
+        return False
+
     next_pos = path[1]
     agent.move_to(next_pos)
 
     print(
-        f"{title} 单步移动 -> pos={agent.pos} energy={agent.energy} "
+        f"{title} 单步移动 -> "
+        f"pos={agent.pos} energy={agent.energy} "
         f"has_package={agent.has_package} score={agent.score}"
     )
     return True
 
 
+def print_step_header(step_idx, grid, agent_pos, enemy_pos):
+    print(f"========== Step {step_idx} ==========")
+    overlay_grid(
+        grid,
+        {
+            agent_pos: "A",
+            enemy_pos: "E",
+        }
+    )
+    print()
+
+
+def print_agent_status(prefix, agent):
+    print(
+        f"{prefix}: pos={agent.pos}, energy={agent.energy}, "
+        f"has_package={agent.has_package}, score={agent.score}"
+    )
+
+
+def handle_events(agent, package_pos, charge_pos, delivery_pos):
+    """
+    处理本回合移动后的事件
+    返回：
+        "continue" / "success" / "fail"
+    """
+    if agent.pos == package_pos and not agent.has_package:
+        agent.pickup_package()
+        print("事件：成功拿到包裹")
+
+    if agent.pos == charge_pos:
+        agent.charge(full_energy=100)
+        print("事件：充电完成")
+
+    if agent.pos == delivery_pos and agent.has_package:
+        agent.deliver_package()
+        print("事件：包裹送达")
+        print_agent_status("最终状态", agent)
+        print("任务完成，程序结束")
+        return "success"
+
+    return "continue"
+
+
+def check_terminal(agent, enemy_pos):
+    """
+    检查是否进入终止状态
+    返回：
+        "continue" / "fail"
+    """
+    if agent.pos == enemy_pos:
+        print("事件：撞上敌人，任务失败")
+        return "fail"
+
+    if agent.energy < 0:
+        print("事件：电量小于 0，任务失败")
+        return "fail"
+
+    # 宽松版规则：
+    # energy == 0 允许停在原地，也允许刚好到达送货点/充电点
+    # 但后续不能继续移动（move_one_step 已限制）
+    return "continue"
+
+
 def main():
+    # 底图里不再放静态 A，避免显示重影
     grid = [
         "##########",
-        "#A..P...D#",
-        "#..##....#",
+        "#...P....#",
+        "#..##E..D#",
         "#....C...#",
         "##########"
     ]
 
-    print("当前地图：")
-    print_grid(grid)
-    print()
+    # 手动指定初始位置
+    agent_pos = (1, 1)
 
-    agent_pos = find_pos(grid, 'A')
-    package_pos = find_pos(grid, 'P')
-    delivery_pos = find_pos(grid, 'D')
-    charge_pos = find_pos(grid, 'C')
+    package_pos = find_pos(grid, "P")
+    delivery_pos = find_pos(grid, "D")
+    charge_pos = find_pos(grid, "C")
+    enemy_pos = find_pos(grid, "E")
 
-    agent = Agent(agent_pos, energy=8)
+    agent = Agent(agent_pos, energy=15)
 
     sm = StateMachine(
-        grid=grid,
-        package_pos=package_pos,
-        delivery_pos=delivery_pos,
-        charge_pos=charge_pos,
-        safety_margin=0
+    grid=grid,
+    package_pos=package_pos,
+    delivery_pos=delivery_pos,
+    charge_pos=charge_pos,
+    enemy_pos=enemy_pos,
+    safety_margin=2,
+    enemy_danger_distance=1,
+    enemy_safe_distance=2,
+    avoid_steps=2,
+    critical_energy_threshold=4,
     )
 
-    print(f"初始状态: pos={agent.pos}, energy={agent.energy}, has_package={agent.has_package}")
+    print("初始地图：")
+    overlay_grid(
+        grid,
+        {
+            agent.pos: "A",
+            enemy_pos: "E",
+        }
+    )
+    print()
+    print_agent_status("初始状态", agent)
     print()
 
-    max_steps = 30
-    for step_idx in range(1, max_steps + 1):
-        print(f"========== Step {step_idx} ==========")
+    max_steps = 50
 
-        # 1. 决策状态
+    for step_idx in range(1, max_steps + 1):
+        print_step_header(step_idx, grid, agent.pos, enemy_pos)
+
         current_state = sm.decide_state(agent)
         reason = sm.get_reason_by_state(current_state)
-        target_pos = sm.get_target_by_state(current_state)
+        target_pos = sm.get_target_by_state(agent, current_state)
 
         print(f"当前状态: {current_state.value}")
         print(f"状态说明: {reason}")
         print(f"目标位置: {target_pos}")
 
-        # 2. 规划路径
-        path = bfs(grid, agent.pos, target_pos)
+        if target_pos is None:
+            print("没有可用目标，程序结束")
+            return
+
+        blocked = {enemy_pos} if enemy_pos is not None else set()
+        path = bfs(grid, agent.pos, target_pos, blocked_positions=blocked)
         print(f"当前规划路径: {path}")
 
-        # 3. 只走一步
         ok = move_one_step(agent, path, current_state.value)
         if not ok:
             print("执行失败，程序结束")
             return
 
-        # 4. 事件处理
-        if agent.pos == package_pos and not agent.has_package:
-            agent.pickup_package()
-            print("事件：成功拿到包裹")
+        sm.after_move(agent, current_state)
 
-        if agent.pos == charge_pos:
-            agent.charge(full_energy=10)
-            print("事件：充电完成")
+        # 先处理碰撞 / 电量异常
+        terminal = check_terminal(agent, enemy_pos)
+        if terminal == "fail":
+            return
 
-        if agent.pos == delivery_pos and agent.has_package:
-            agent.deliver_package()
-            print("事件：包裹送达")
-            print(
-                f"最终状态: pos={agent.pos}, energy={agent.energy}, "
-                f"has_package={agent.has_package}, score={agent.score}"
-            )
-            print("任务完成，程序结束")
-            break
+        # 再处理拿包裹 / 充电 / 送达
+        event_result = handle_events(agent, package_pos, charge_pos, delivery_pos)
+        if event_result == "success":
+            return
 
-        print(
-            f"回合结束状态: pos={agent.pos}, energy={agent.energy}, "
-            f"has_package={agent.has_package}, score={agent.score}"
-        )
+        print_agent_status("回合结束状态", agent)
         print()
+
+    print("达到最大步数，程序结束")
 
 
 if __name__ == "__main__":
