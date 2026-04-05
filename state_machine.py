@@ -11,7 +11,7 @@ class AgentState(Enum):
 
 
 def path_steps(path):
-    if path is None:
+    if path is None or len(path) == 0:
         return None
     return len(path) - 1
 
@@ -24,11 +24,20 @@ class StateMachine:
         delivery_pos,
         charge_pos,
         enemy_pos=None,
+
+        # ===== 原有参数 =====
         safety_margin=2,
         enemy_danger_distance=2,
         enemy_safe_distance=3,
         avoid_steps=3,
         critical_energy_threshold=2,
+
+        # ===== 新增：planner 参数 =====
+        hard_block_distance=0,
+        high_risk_distance=1,
+        medium_risk_distance=2,
+        high_risk_cost=8,
+        medium_risk_cost=3,
     ):
         self.grid = grid
         self.package_pos = package_pos
@@ -36,20 +45,21 @@ class StateMachine:
         self.charge_pos = charge_pos
         self.enemy_pos = enemy_pos
 
+        # ===== 原有 =====
         self.safety_margin = safety_margin
-
-        # 进入避障阈值
         self.enemy_danger_distance = enemy_danger_distance
-        # 退出避障阈值（形成滞回）
         self.enemy_safe_distance = enemy_safe_distance
-
-        # 避障至少持续几步
         self.avoid_steps = avoid_steps
-
-        # 危急电量阈值：拿着包裹且电量很低时，优先去充电
         self.critical_energy_threshold = critical_energy_threshold
 
-        # 避障模式状态
+        # ===== 新增：planner 参数 =====
+        self.hard_block_distance = hard_block_distance
+        self.high_risk_distance = high_risk_distance
+        self.medium_risk_distance = medium_risk_distance
+        self.high_risk_cost = high_risk_cost
+        self.medium_risk_cost = medium_risk_cost
+
+        # ===== 避障状态 =====
         self.in_avoid_mode = False
         self.avoid_target = None
 
@@ -66,6 +76,9 @@ class StateMachine:
 
     def is_enemy_far_enough(self, agent):
         return self.get_enemy_distance(agent.pos) >= self.enemy_safe_distance
+
+    def is_position_safe(self, pos):
+        return self.get_enemy_distance(pos) >= self.enemy_safe_distance
 
     def get_neighbors(self, pos):
         x, y = pos
@@ -88,10 +101,6 @@ class StateMachine:
         return agent.energy >= steps + safety_margin
 
     def can_reach_without_margin(self, agent, path):
-        """
-        只判断“能不能走到”，不额外预留安全边际。
-        用在危急充电判断里。
-        """
         steps = path_steps(path)
         if steps is None:
             return False
@@ -101,6 +110,23 @@ class StateMachine:
         if agent.has_package:
             return self.delivery_pos
         return self.package_pos
+
+    def plan_path(self, start, goal):
+        enemy_positions = []
+        if self.enemy_pos is not None:
+            enemy_positions.append(self.enemy_pos)
+
+        return dijkstra_risk_path(
+            grid=self.grid,
+            start=start,
+            goal=goal,
+            enemy_positions=enemy_positions,
+            hard_block_distance=0,
+            high_risk_distance=1,
+            medium_risk_distance=2,
+            high_risk_cost=8,
+            medium_risk_cost=3,
+        )
 
     # =========================
     # 电量与任务判断
@@ -124,10 +150,10 @@ class StateMachine:
 
     def is_critical_charge_needed(self, agent):
         """
-        危急充电条件：
+        危急充电：
         1. 已拿包裹
-        2. 电量低于危急阈值
-        3. 当前至少还有机会走到充电桩
+        2. 电量低
+        3. 至少还能走到充电桩
         """
         if not agent.has_package:
             return False
@@ -140,7 +166,7 @@ class StateMachine:
 
     def choose_pre_package_strategy(self, agent):
         """
-        未拿包裹时比较两种策略：
+        未拿包裹时比较：
         1. 先充电：当前位置 -> 充电桩 -> 包裹 -> 驿站
         2. 先拿包裹再充电：当前位置 -> 包裹 -> 充电桩 -> 驿站
         """
@@ -199,17 +225,37 @@ class StateMachine:
             for y in range(cols):
                 if not is_walkable(self.grid, x, y):
                     continue
-                if self.get_enemy_distance((x, y)) >= self.enemy_safe_distance:
+                if self.is_position_safe((x, y)):
                     safe_positions.append((x, y))
 
         return safe_positions
 
+    def should_keep_current_avoid_target(self, agent):
+        """
+        当前已有避障目标时，尽量继续沿用，避免每步重选导致抖动。
+        """
+        if self.avoid_target is None:
+            return False
+
+        if self.avoid_target == agent.pos:
+            return False
+
+        if not self.is_position_safe(self.avoid_target):
+            return False
+
+        path = self.plan_path(agent.pos, self.avoid_target)
+        if path is None or len(path) < 2:
+            return False
+
+        return True
+
     def choose_avoid_target(self, agent):
         """
         进入避障时选一个临时安全点：
-        1. 必须可达
-        2. 尽量安全
-        3. 尽量别太远
+        1. 必须安全
+        2. 必须可达
+        3. 尽量离当前近
+        4. 但也别太偏离主任务
         """
         safe_positions = self.find_safe_positions(agent)
         if not safe_positions:
@@ -230,7 +276,10 @@ class StateMachine:
             enemy_dist = self.get_enemy_distance(pos)
             target_dist = manhattan_distance(pos, main_target)
 
-            # 优先：更近的安全点；更远离敌人；别太偏离主任务
+            # 排序逻辑：
+            # 先选更近的安全点
+            # 同距离下更远离敌人
+            # 再同分时更接近主任务目标
             candidates.append((steps, -enemy_dist, target_dist, pos))
 
         if not candidates:
@@ -241,7 +290,8 @@ class StateMachine:
 
     def get_fallback_avoid_step(self, agent):
         """
-        如果安全点策略失效，就退化到邻居级避让
+        如果安全点策略失效，就退化到邻居级避让。
+        更强地惩罚回头走，减少横跳。
         """
         neighbors = self.get_neighbors(agent.pos)
         if not neighbors:
@@ -250,18 +300,32 @@ class StateMachine:
         scored = []
         for pos in neighbors:
             enemy_dist = self.get_enemy_distance(pos)
-            backtrack_penalty = 1 if agent.prev_pos is not None and pos == agent.prev_pos else 0
-            scored.append((backtrack_penalty, -enemy_dist, pos))
+
+            # 强惩罚回到上一步
+            backtrack_penalty = 2 if agent.prev_pos is not None and pos == agent.prev_pos else 0
+
+            # 轻微偏好“更接近主任务”的方向，避免一味乱跑
+            main_target = self.get_main_target(agent)
+            target_dist = manhattan_distance(pos, main_target)
+
+            # 排序：
+            # 1. 尽量不回头
+            # 2. 尽量离敌人远
+            # 3. 尽量别偏离主任务太远
+            scored.append((backtrack_penalty, -enemy_dist, target_dist, pos))
 
         scored.sort()
-        return scored[0][2]
+        return scored[0][3]
 
     def get_avoid_target(self, agent):
         """
-        避障时优先走向缓存的安全点，不要每步乱重算。
+        避障时优先沿用已有安全点。
+        只有当前目标失效时才重选。
         """
-        if self.avoid_target is None:
-            self.avoid_target = self.choose_avoid_target(agent)
+        if self.should_keep_current_avoid_target(agent):
+            return self.avoid_target
+
+        self.avoid_target = self.choose_avoid_target(agent)
 
         if self.avoid_target == agent.pos:
             return self.get_fallback_avoid_step(agent)
@@ -275,7 +339,8 @@ class StateMachine:
     def enter_avoid_mode(self, agent):
         self.in_avoid_mode = True
         agent.avoid_cooldown = self.avoid_steps
-        if self.avoid_target is None:
+
+        if not self.should_keep_current_avoid_target(agent):
             self.avoid_target = self.choose_avoid_target(agent)
 
     def exit_avoid_mode(self, agent):
@@ -286,17 +351,37 @@ class StateMachine:
     # =========================
     # 状态决策
     # =========================
+    def should_force_delivery(self, agent):
+        """
+        已拿包裹且离终点很近时，允许压过普通避障，直接冲刺送达
+        """
+        if not agent.has_package:
+            return False
+
+        path_to_delivery = self.plan_path(agent.pos, self.delivery_pos)
+        steps = path_steps(path_to_delivery)
+
+        if steps is None:
+            return False
+
+        # 至少得走得到
+        if not self.can_reach_without_margin(agent, path_to_delivery):
+            return False
+
+        # 剩余 2 步内直接冲刺
+        return steps <= 2
+
     def decide_state(self, agent):
         """
-        当前优先级：
-        1. 危急充电（拿着包裹且电量很低）
-        2. 避障模式维持 / 新进入避障
-        3. 正常送货或充电
-        4. 未拿包裹时的策略比较
+        优先级：
+        1. 危急充电
+        2. 终点冲刺
+        3. 维持避障模式
+        4. 新进入避障
+        5. 正常任务逻辑
         """
 
         # P1：危急充电优先
-        # 已拿包裹且电量很低时，优先去充电，不被普通避障打断
         if self.is_critical_charge_needed(agent):
             self.exit_avoid_mode(agent)
             return AgentState.GO_CHARGE
@@ -305,15 +390,16 @@ class StateMachine:
         if self.should_force_delivery(agent):
             self.exit_avoid_mode(agent)
             return AgentState.GO_DELIVERY
-        
+
         # P3：已经在避障模式中
         if self.in_avoid_mode:
+            # 真正满足“已足够安全 + 冷却结束”才退出
             if self.is_enemy_far_enough(agent) and agent.avoid_cooldown <= 0:
                 self.exit_avoid_mode(agent)
             else:
                 return AgentState.AVOID_ENEMY
 
-        # P4：不在避障模式，但敌人过近 -> 进入避障
+        # P4：不在避障模式，但敌人过近
         if self.enemy_pos is not None and self.is_enemy_near(agent):
             self.enter_avoid_mode(agent)
             return AgentState.AVOID_ENEMY
@@ -327,7 +413,7 @@ class StateMachine:
 
             return AgentState.GO_CHARGE
 
-        # P6：未拿包裹时，先看能否直接完成
+        # P6：未拿包裹时，先看能否直接完成配送
         if self.can_finish_direct_delivery(agent):
             return AgentState.GO_PACKAGE
 
@@ -338,7 +424,7 @@ class StateMachine:
         return AgentState.GO_CHARGE
 
     # =========================
-    # 状态 -> 目标点
+    # 状态 -> 目标
     # =========================
     def get_target_by_state(self, agent, state):
         if state == AgentState.GO_PACKAGE:
@@ -369,43 +455,8 @@ class StateMachine:
         if state == AgentState.AVOID_ENEMY and agent.avoid_cooldown > 0:
             agent.avoid_cooldown -= 1
 
-        if state == AgentState.AVOID_ENEMY and self.avoid_target == agent.pos:
-            if self.is_enemy_far_enough(agent) and agent.avoid_cooldown <= 0:
-                self.exit_avoid_mode(agent)
-
-    def should_force_delivery(self, agent):
-        """
-        已拿包裹且离终点很近时，允许压过普通避障，直接冲刺送达
-        """
-        if not agent.has_package:
-            return False
-
-        path_to_delivery = self.plan_path(agent.pos, self.delivery_pos)
-        steps = path_steps(path_to_delivery)
-
-        if steps is None:
-            return False
-
-        # 至少得走得到
-        if not self.can_reach_without_margin(agent, path_to_delivery):
-            return False
-
-        # 剩余 2 步内，直接冲刺
-        return steps <= 2
-    
-    def plan_path(self, start, goal):
-        enemy_positions = []
-        if self.enemy_pos is not None:
-            enemy_positions.append(self.enemy_pos)
-
-        return dijkstra_risk_path(
-            grid=self.grid,
-            start=start,
-            goal=goal,
-            enemy_positions=enemy_positions,
-            hard_block_distance=0,
-            high_risk_distance=1,
-            medium_risk_distance=2,
-            high_risk_cost=8,
-            medium_risk_cost=3,
-        )
+        # 到了安全目标点后，如果也满足退出条件，就退出避障
+        if state == AgentState.AVOID_ENEMY:
+            if self.avoid_target is not None and agent.pos == self.avoid_target:
+                if self.is_enemy_far_enough(agent) and agent.avoid_cooldown <= 0:
+                    self.exit_avoid_mode(agent)

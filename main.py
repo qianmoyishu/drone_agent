@@ -4,6 +4,7 @@ from state_machine import StateMachine
 from utils import find_pos, overlay_grid
 
 
+
 def move_one_step(agent, path, title):
     """
     沿当前规划路径移动一步
@@ -51,17 +52,12 @@ def print_agent_status(prefix, agent):
     )
 
 
-def handle_events(agent, package_pos, charge_pos, delivery_pos):
-    """
-    处理本回合移动后的事件
-    返回：
-        "continue" / "success" / "fail"
-    """
+def handle_events(agent, package_pos, charge_pos, delivery_pos, current_state):
     if agent.pos == package_pos and not agent.has_package:
         agent.pickup_package()
         print("事件：成功拿到包裹")
 
-    if agent.pos == charge_pos:
+    if agent.pos == charge_pos and current_state.value == "GO_CHARGE":
         agent.charge(full_energy=100)
         print("事件：充电完成")
 
@@ -97,16 +93,38 @@ def check_terminal(agent, enemy_pos):
 
 def main():
     # 底图里不再放静态 A，避免显示重影
+    # grid = [
+    #     "##########",
+    #     "#A..P....#",
+    #     "#..##E..D#",
+    #     "#....C...#",
+    #     "##########"
+    # ]
+    # grid = [
+    #     "##########",
+    #     "#A.......#",
+    #     "#..####..#",
+    #     "#..E..P.D#",
+    #     "#....C...#",
+    #     "##########"
+    # ]
+    # grid = [
+    #     "##########",
+    #     "#...P....#",
+    #     "#..##...E#",
+    #     "#A...C..D#",
+    #     "##########"
+    # ]
     grid = [
         "##########",
-        "#...P....#",
-        "#..##E..D#",
-        "#....C...#",
+        "#...#....#",
+        "#.#.#.##D#",
+        "#.#E#..P.#",
+        "#...C....#",
         "##########"
     ]
 
-    # 手动指定初始位置
-    agent_pos = (1, 1)
+    agent_pos = (2, 1)
 
     package_pos = find_pos(grid, "P")
     delivery_pos = find_pos(grid, "D")
@@ -116,16 +134,25 @@ def main():
     agent = Agent(agent_pos, energy=15)
 
     sm = StateMachine(
-    grid=grid,
-    package_pos=package_pos,
-    delivery_pos=delivery_pos,
-    charge_pos=charge_pos,
-    enemy_pos=enemy_pos,
-    safety_margin=2,
-    enemy_danger_distance=1,
-    enemy_safe_distance=2,
-    avoid_steps=2,
-    critical_energy_threshold=4,
+        grid=grid,
+        package_pos=package_pos,
+        delivery_pos=delivery_pos,
+        charge_pos=charge_pos,
+        enemy_pos=enemy_pos,
+
+        # ===== 原有 =====
+        safety_margin=2,
+        enemy_danger_distance=1,
+        enemy_safe_distance=2,
+        avoid_steps=2,
+        critical_energy_threshold=4,
+
+        # ===== 新增 planner 参数 =====
+        hard_block_distance=0,
+        high_risk_distance=1,
+        medium_risk_distance=2,
+        high_risk_cost=8,
+        medium_risk_cost=3,
     )
 
     print("初始地图：")
@@ -189,7 +216,14 @@ def main():
             return
 
         # 再处理拿包裹 / 充电 / 送达
-        event_result = handle_events(agent, package_pos, charge_pos, delivery_pos)
+        event_result = handle_events(
+            agent,
+            package_pos,
+            charge_pos,
+            delivery_pos,
+            current_state,
+        )
+
         if event_result == "success":
             return
 
