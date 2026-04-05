@@ -1,9 +1,4 @@
-from planner import dijkstra_risk_path, get_next_step
-from agent import Agent
-from state_machine import StateMachine
-from utils import find_pos, overlay_grid
-
-
+from env import DroneEnv,RulePolicy
 
 def move_one_step(agent, path, title):
     """
@@ -91,147 +86,96 @@ def check_terminal(agent, enemy_pos):
     return "continue"
 
 
-def main():
-    # 底图里不再放静态 A，避免显示重影
-    # grid = [
-    #     "##########",
-    #     "#A..P....#",
-    #     "#..##E..D#",
-    #     "#....C...#",
-    #     "##########"
-    # ]
-    # grid = [
-    #     "##########",
-    #     "#A.......#",
-    #     "#..####..#",
-    #     "#..E..P.D#",
-    #     "#....C...#",
-    #     "##########"
-    # ]
-    # grid = [
-    #     "##########",
-    #     "#...P....#",
-    #     "#..##...E#",
-    #     "#A...C..D#",
-    #     "##########"
-    # ]
-    grid = [
-        "##########",
-        "#...#....#",
-        "#.#.#.##D#",
-        "#.#E#..P.#",
-        "#...C....#",
-        "##########"
-    ]
+# def main():
+ 
+#     max_steps = 50
 
-    agent_pos = (2, 1)
+#     for step_idx in range(1, max_steps + 1):
+#         print_step_header(step_idx, grid, agent.pos, enemy_pos)
 
-    package_pos = find_pos(grid, "P")
-    delivery_pos = find_pos(grid, "D")
-    charge_pos = find_pos(grid, "C")
-    enemy_pos = find_pos(grid, "E")
+#         current_state = sm.decide_state(agent)
+#         reason = sm.get_reason_by_state(current_state)
+#         target_pos = sm.get_target_by_state(agent, current_state)
 
-    agent = Agent(agent_pos, energy=15)
+#         print(f"当前状态: {current_state.value}")
+#         print(f"状态说明: {reason}")
+#         print(f"目标位置: {target_pos}")
 
-    sm = StateMachine(
-        grid=grid,
-        package_pos=package_pos,
-        delivery_pos=delivery_pos,
-        charge_pos=charge_pos,
-        enemy_pos=enemy_pos,
-
-        # ===== 原有 =====
-        safety_margin=2,
-        enemy_danger_distance=1,
-        enemy_safe_distance=2,
-        avoid_steps=2,
-        critical_energy_threshold=4,
-
-        # ===== 新增 planner 参数 =====
-        hard_block_distance=0,
-        high_risk_distance=1,
-        medium_risk_distance=2,
-        high_risk_cost=8,
-        medium_risk_cost=3,
-    )
-
-    print("初始地图：")
-    overlay_grid(
-        grid,
-        {
-            agent.pos: "A",
-            enemy_pos: "E",
-        }
-    )
-    print()
-    print_agent_status("初始状态", agent)
-    print()
-
-    max_steps = 50
-
-    for step_idx in range(1, max_steps + 1):
-        print_step_header(step_idx, grid, agent.pos, enemy_pos)
-
-        current_state = sm.decide_state(agent)
-        reason = sm.get_reason_by_state(current_state)
-        target_pos = sm.get_target_by_state(agent, current_state)
-
-        print(f"当前状态: {current_state.value}")
-        print(f"状态说明: {reason}")
-        print(f"目标位置: {target_pos}")
-
-        if target_pos is None:
-            print("没有可用目标，程序结束")
-            return
+#         if target_pos is None:
+#             print("没有可用目标，程序结束")
+#             return
         
-        enemy_positions = []
-        if enemy_pos is not None:
-            enemy_positions.append(enemy_pos)
+#         enemy_positions = []
+#         if enemy_pos is not None:
+#             enemy_positions.append(enemy_pos)
 
-        path = dijkstra_risk_path(
-            grid=grid,
-            start=agent.pos,
-            goal=target_pos,
-            enemy_positions=enemy_positions,
-            extra_blocked_positions=None,   # 以后如果还有别的禁走点可以加这里
-            hard_block_distance=0,          # 敌人所在格绝对不能走
-            high_risk_distance=1,           # 敌人一圈高风险
-            medium_risk_distance=2,         # 再外一圈中风险
-            high_risk_cost=8,
-            medium_risk_cost=3,
-        )
+#         path = dijkstra_risk_path(
+#             grid=grid,
+#             start=agent.pos,
+#             goal=target_pos,
+#             enemy_positions=enemy_positions,
+#             extra_blocked_positions=None,   # 以后如果还有别的禁走点可以加这里
+#             hard_block_distance=0,          # 敌人所在格绝对不能走
+#             high_risk_distance=1,           # 敌人一圈高风险
+#             medium_risk_distance=2,         # 再外一圈中风险
+#             high_risk_cost=8,
+#             medium_risk_cost=3,
+#         )
 
-        print(f"当前规划路径: {path}")
+#         print(f"当前规划路径: {path}")
 
-        ok = move_one_step(agent, path, current_state.value)
-        if not ok:
-            print("执行失败，程序结束")
-            return
+#         ok = move_one_step(agent, path, current_state.value)
+#         if not ok:
+#             print("执行失败，程序结束")
+#             return
 
-        sm.after_move(agent, current_state)
+#         sm.after_move(agent, current_state)
 
-        # 先处理碰撞 / 电量异常
-        terminal = check_terminal(agent, enemy_pos)
-        if terminal == "fail":
-            return
+#         # 先处理碰撞 / 电量异常
+#         terminal = check_terminal(agent, enemy_pos)
+#         if terminal == "fail":
+#             return
 
-        # 再处理拿包裹 / 充电 / 送达
-        event_result = handle_events(
-            agent,
-            package_pos,
-            charge_pos,
-            delivery_pos,
-            current_state,
-        )
+#         # 再处理拿包裹 / 充电 / 送达
+#         event_result = handle_events(
+#             agent,
+#             package_pos,
+#             charge_pos,
+#             delivery_pos,
+#             current_state,
+#         )
 
-        if event_result == "success":
-            return
+#         if event_result == "success":
+#             return
 
-        print_agent_status("回合结束状态", agent)
-        print()
+#         print_agent_status("回合结束状态", agent)
+#         print()
 
-    print("达到最大步数，程序结束")
+#     print("达到最大步数，程序结束")
+def main():
+    env = DroneEnv()   # ✅ 必须有这一行
+    policy = RulePolicy()
 
+    obs = env.reset()
+    print("reset:", obs)
+
+    step = 0
+
+    while step<10:
+        action = policy.act(obs)
+        obs, reward, done, info = env.step(action)
+
+        print(f"step {step}, action={action}")
+        print("obs:", obs)
+        print("reward:", reward)
+        print("done:", done)
+        print("info:", info)
+        print("------")
+
+        step += 1
+
+        if done:
+            break
 
 if __name__ == "__main__":
     main()
