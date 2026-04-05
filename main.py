@@ -1,4 +1,4 @@
-from planner import bfs
+from planner import dijkstra_risk_path, get_next_step
 from agent import Agent
 from state_machine import StateMachine
 from utils import find_pos, overlay_grid
@@ -156,9 +156,24 @@ def main():
         if target_pos is None:
             print("没有可用目标，程序结束")
             return
+        
+        enemy_positions = []
+        if enemy_pos is not None:
+            enemy_positions.append(enemy_pos)
 
-        blocked = {enemy_pos} if enemy_pos is not None else set()
-        path = bfs(grid, agent.pos, target_pos, blocked_positions=blocked)
+        path = dijkstra_risk_path(
+            grid=grid,
+            start=agent.pos,
+            goal=target_pos,
+            enemy_positions=enemy_positions,
+            extra_blocked_positions=None,   # 以后如果还有别的禁走点可以加这里
+            hard_block_distance=0,          # 敌人所在格绝对不能走
+            high_risk_distance=1,           # 敌人一圈高风险
+            medium_risk_distance=2,         # 再外一圈中风险
+            high_risk_cost=8,
+            medium_risk_cost=3,
+        )
+
         print(f"当前规划路径: {path}")
 
         ok = move_one_step(agent, path, current_state.value)

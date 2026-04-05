@@ -1,5 +1,5 @@
 from enum import Enum
-from planner import bfs
+from planner import dijkstra_risk_path
 from utils import manhattan_distance, is_walkable
 
 
@@ -110,8 +110,8 @@ class StateMachine:
         未拿包裹时，是否能直接完成：
         当前 -> 包裹 -> 驿站
         """
-        path_to_package = bfs(self.grid, agent.pos, self.package_pos)
-        path_package_to_delivery = bfs(self.grid, self.package_pos, self.delivery_pos)
+        path_to_package = self.plan_path(agent.pos, self.package_pos)
+        path_package_to_delivery = self.plan_path(self.package_pos, self.delivery_pos)
 
         s1 = path_steps(path_to_package)
         s2 = path_steps(path_package_to_delivery)
@@ -135,7 +135,7 @@ class StateMachine:
         if agent.energy > self.critical_energy_threshold:
             return False
 
-        path_to_charge = bfs(self.grid, agent.pos, self.charge_pos)
+        path_to_charge = self.plan_path(agent.pos, self.charge_pos)
         return self.can_reach_without_margin(agent, path_to_charge)
 
     def choose_pre_package_strategy(self, agent):
@@ -145,9 +145,9 @@ class StateMachine:
         2. 先拿包裹再充电：当前位置 -> 包裹 -> 充电桩 -> 驿站
         """
         # 方案1：先充电
-        path_to_charge = bfs(self.grid, agent.pos, self.charge_pos)
-        path_charge_to_package = bfs(self.grid, self.charge_pos, self.package_pos)
-        path_package_to_delivery = bfs(self.grid, self.package_pos, self.delivery_pos)
+        path_to_charge = self.plan_path(agent.pos, self.charge_pos)
+        path_charge_to_package = self.plan_path(self.charge_pos, self.package_pos)
+        path_package_to_delivery = self.plan_path(self.package_pos, self.delivery_pos)
 
         a = path_steps(path_to_charge)
         b = path_steps(path_charge_to_package)
@@ -159,9 +159,9 @@ class StateMachine:
             total_charge_first = a + b + c
 
         # 方案2：先拿包裹再充电
-        path_to_package = bfs(self.grid, agent.pos, self.package_pos)
-        path_package_to_charge = bfs(self.grid, self.package_pos, self.charge_pos)
-        path_charge_to_delivery = bfs(self.grid, self.charge_pos, self.delivery_pos)
+        path_to_package = self.plan_path(agent.pos, self.package_pos)
+        path_package_to_charge = self.plan_path(self.package_pos, self.charge_pos)
+        path_charge_to_delivery = self.plan_path(self.charge_pos, self.delivery_pos)
 
         can_package_first = self.can_reach_with_margin(
             agent, path_to_package, self.safety_margin
@@ -222,7 +222,7 @@ class StateMachine:
             if pos == agent.pos:
                 continue
 
-            path = bfs(self.grid, agent.pos, pos)
+            path = self.plan_path(agent.pos, pos)
             steps = path_steps(path)
             if steps is None:
                 continue
@@ -266,7 +266,7 @@ class StateMachine:
         if self.avoid_target == agent.pos:
             return self.get_fallback_avoid_step(agent)
 
-        path = bfs(self.grid, agent.pos, self.avoid_target)
+        path = self.plan_path(agent.pos, self.avoid_target)
         if path is None or len(path) < 2:
             return self.get_fallback_avoid_step(agent)
 
@@ -320,7 +320,7 @@ class StateMachine:
 
         # P5：正常任务逻辑
         if agent.has_package:
-            path_to_delivery = bfs(self.grid, agent.pos, self.delivery_pos)
+            path_to_delivery = self.plan_path(agent.pos, self.delivery_pos)
 
             if self.can_reach_with_margin(agent, path_to_delivery, self.safety_margin):
                 return AgentState.GO_DELIVERY
@@ -380,7 +380,7 @@ class StateMachine:
         if not agent.has_package:
             return False
 
-        path_to_delivery = bfs(self.grid, agent.pos, self.delivery_pos)
+        path_to_delivery = self.plan_path(agent.pos, self.delivery_pos)
         steps = path_steps(path_to_delivery)
 
         if steps is None:
@@ -392,3 +392,20 @@ class StateMachine:
 
         # 剩余 2 步内，直接冲刺
         return steps <= 2
+    
+    def plan_path(self, start, goal):
+        enemy_positions = []
+        if self.enemy_pos is not None:
+            enemy_positions.append(self.enemy_pos)
+
+        return dijkstra_risk_path(
+            grid=self.grid,
+            start=start,
+            goal=goal,
+            enemy_positions=enemy_positions,
+            hard_block_distance=0,
+            high_risk_distance=1,
+            medium_risk_distance=2,
+            high_risk_cost=8,
+            medium_risk_cost=3,
+        )
